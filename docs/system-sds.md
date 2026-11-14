@@ -152,7 +152,7 @@ QueueTicket
 | Token expiry | 24 hours |
 | Current user retrieval | `requireAuth` middleware decodes JWT from cookie on each request |
 | Logout | Server calls `res.clearCookie("token")`; client redirected to login |
-| CORS | Allows only `http://localhost:5173` with `credentials: true` |
+| CORS | Allows `http://localhost:5174` and `http://localhost:5173` with `credentials: true` |
 
 ---
 

@@ -13,7 +13,7 @@ const JWT_SECRET = process.env.JWT_SECRET || "dev-secret-change-in-production";
 const JWT_EXPIRES = "24h";
 
 // ── Middleware ────────────────────────────────────────────
-app.use(cors({ origin: "http://localhost:5173", credentials: true }));
+app.use(cors({ origin: ["http://localhost:5173", "http://localhost:5174"], credentials: true }));
 app.use(express.json());
 app.use(cookieParser());
 

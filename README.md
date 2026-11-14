@@ -112,10 +112,10 @@ npm run dev
 ```bash
 cd client
 npm run dev
-# Running at http://localhost:5173
+# Running at http://localhost:5174 (or http://localhost:5173)
 ```
 
-Visit **http://localhost:5173** in your browser.
+Visit **http://localhost:5174** in your browser.
 
 ---
 
