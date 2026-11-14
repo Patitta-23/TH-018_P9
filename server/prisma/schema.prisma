@@ -1,0 +1,82 @@
+// This is your Prisma schema file.
+// Docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── User ────────────────────────────────────────
+// Represents both Customers and Operators.
+// Role determines what actions they may perform.
+model User {
+  id           Int           @id @default(autoincrement())
+  email        String        @unique
+  passwordHash String
+  role         Role
+  createdAt    DateTime      @default(now())
+
+  // Relations
+  tickets      QueueTicket[] @relation("CustomerTickets")
+  counter      Counter?      @relation("OperatorCounter")
+}
+
+enum Role {
+  CUSTOMER
+  OPERATOR
+}
+
+// ─── Counter ─────────────────────────────────────
+// A service counter managed by one Operator.
+// Customers join queues attached to a counter.
+model Counter {
+  id             Int           @id @default(autoincrement())
+  name           String
+  status         CounterStatus @default(CLOSED)
+  currentServing Int           @default(0)
+  serviceDate    DateTime      @default(now())
+
+  // One Operator manages this counter (nullable — counter unassigned when no operator)
+  operatorId     Int?          @unique
+  operator       User?         @relation("OperatorCounter", fields: [operatorId], references: [id])
+
+  // Tickets in this counter's queue
+  tickets        QueueTicket[]
+}
+
+enum CounterStatus {
+  OPEN
+  CLOSED
+}
+
+// ─── QueueTicket ─────────────────────────────────
+// Represents a customer's place in a counter queue.
+// Business rules:
+//   BR-01: A customer cannot have two active tickets for the same counter.
+//          Enforced by application logic (not DB-level unique constraint
+//          because the condition depends on status).
+model QueueTicket {
+  id          Int          @id @default(autoincrement())
+  queueNumber Int
+  status      TicketStatus @default(WAITING)
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  customerId  Int
+  customer    User         @relation("CustomerTickets", fields: [customerId], references: [id])
+
+  counterId   Int
+  counter     Counter      @relation(fields: [counterId], references: [id])
+}
+
+enum TicketStatus {
+  WAITING
+  IN_SERVICE
+  SERVED
+  CANCELLED
+}
+
