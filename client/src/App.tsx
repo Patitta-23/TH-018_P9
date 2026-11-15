@@ -470,7 +470,10 @@ function App() {
                             <td>
                               <button
                                 className="btn btn-primary btn-sm"
-                                disabled={c.status === "CLOSED" || myTicket !== null}
+                                disabled={
+                                  c.status === "CLOSED" ||
+                                  (myTicket !== null && myTicket.counter.id === c.id)
+                                }
                                 onClick={() => handleJoinQueue(c.id)}
                                 data-testid={`join-btn-${c.id}`}
                               >
