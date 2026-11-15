@@ -61,11 +61,17 @@ describe("Issue #1: authenticated counter lookup", () => {
     expect(res.body.code).toBe("NO_ASSIGNED_COUNTER");
   });
   it("does not expose database details on failure", async () => {
-    vi.spyOn(prisma.counter, "findUnique").mockRejectedValueOnce(new Error("private database details"));
+    // Prisma delegates are proxies: preserve the callable explicitly.
+    const findUnique = prisma.counter.findUnique;
+    prisma.counter.findUnique = vi.fn().mockRejectedValue(new Error("private database details"));
     vi.spyOn(console, "error").mockImplementation(() => {});
-    const res = await request(app).get(endpoint).set("Cookie", cookies[0]);
-    expect(res.status).toBe(500);
-    expect(res.body).toEqual({ error: "Failed to load your counter", code: "COUNTER_LOAD_FAILED" });
+    try {
+      const res = await request(app).get(endpoint).set("Cookie", cookies[0]);
+      expect(res.status).toBe(500);
+      expect(res.body).toEqual({ error: "Failed to load your counter", code: "COUNTER_LOAD_FAILED" });
+    } finally {
+      prisma.counter.findUnique = findUnique;
+    }
   });
   it("keeps the public board free of operator identity", async () => {
     const res = await request(app).get("/api/board");
