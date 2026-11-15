@@ -6,7 +6,7 @@ import App from "./App";
 beforeEach(() => {
   vi.spyOn(console, "error").mockImplementation(() => {});
   // Default: /api/auth/me returns 401 (not logged in)
-  vi.spyOn(global, "fetch").mockResolvedValue({
+  vi.spyOn(globalThis, "fetch").mockResolvedValue({
     ok: false,
     status: 401,
     json: async () => ({ error: "Unauthorized" }),
@@ -47,7 +47,7 @@ describe("UI-01: App heading and login form", () => {
 // ─────────────────────────────────────────────────────────
 describe("UI-02: Successful Customer login shows customer dashboard", () => {
   it("renders customer dashboard after successful login", async () => {
-    vi.spyOn(global, "fetch")
+    vi.spyOn(globalThis, "fetch")
       // /api/auth/me → not logged in initially
       .mockResolvedValueOnce({
         ok: false,
@@ -99,7 +99,7 @@ describe("UI-02: Successful Customer login shows customer dashboard", () => {
 // ─────────────────────────────────────────────────────────
 describe("UI-03: Login failure shows error message", () => {
   it("displays an error when credentials are invalid", async () => {
-    vi.spyOn(global, "fetch")
+    vi.spyOn(globalThis, "fetch")
       // /api/auth/me → 401
       .mockResolvedValueOnce({
         ok: false,
@@ -137,7 +137,7 @@ describe("UI-03: Login failure shows error message", () => {
 // ─────────────────────────────────────────────────────────
 describe("UI-04: Operator login shows operator dashboard", () => {
   it("renders operator dashboard after Operator login", async () => {
-    vi.spyOn(global, "fetch")
+    vi.spyOn(globalThis, "fetch")
       .mockResolvedValueOnce({
         ok: false,
         status: 401,
@@ -152,9 +152,7 @@ describe("UI-04: Operator login shows operator dashboard", () => {
       .mockResolvedValueOnce({
         ok: true,
         json: async () => ({
-          counters: [
-            { id: 1, name: "Counter A", status: "CLOSED", currentServing: 0 },
-          ],
+          counter: { id: 1, name: "Counter A", status: "CLOSED", currentServing: 0 },
         }),
       } as Response);
 
@@ -171,6 +169,7 @@ describe("UI-04: Operator login shows operator dashboard", () => {
 
     await waitFor(() => {
       expect(screen.getByTestId("operator-dashboard")).toBeInTheDocument();
+      expect(screen.getByRole("heading", { name: "Counter A" })).toBeInTheDocument();
     });
   });
 });

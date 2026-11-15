@@ -86,6 +86,30 @@ app.get("/api/board", async (_req, res) => {
   }
 });
 
+// GET /api/counters/my-counter
+// Resolve ownership from the verified session, never a client-supplied ID.
+app.get(
+  "/api/counters/my-counter",
+  requireAuth,
+  requireRole("OPERATOR"),
+  async (req: AuthRequest, res) => {
+    try {
+      const counter = await prisma.counter.findUnique({
+        where: { operatorId: req.user!.id },
+        select: { id: true, name: true, status: true, currentServing: true },
+      });
+      if (!counter) {
+        res.status(404).json({ error: "No counter assigned", code: "NO_ASSIGNED_COUNTER" });
+        return;
+      }
+      res.status(200).json({ counter });
+    } catch (error) {
+      console.error("Operator counter fetch failed:", error);
+      res.status(500).json({ error: "Failed to load your counter", code: "COUNTER_LOAD_FAILED" });
+    }
+  }
+);
+
 // ═════════════════════════════════════════════════════════
 // QUEUE ROUTES — Customer only
 // ═════════════════════════════════════════════════════════

@@ -45,6 +45,9 @@ function App() {
 
   // Operator state
   const [myCounter, setMyCounter] = useState<Counter | null>(null);
+  const [counterLoading, setCounterLoading] = useState(true);
+  const [counterLoadError, setCounterLoadError] = useState("");
+  const [counterRetry, setCounterRetry] = useState(0);
   const [operatorMsg, setOperatorMsg] = useState("");
   const [operatorError, setOperatorError] = useState("");
 
@@ -89,24 +92,46 @@ function App() {
   }, []);
 
   // ── Load operator's counter ───────────────────────────
-  const loadMyCounter = useCallback(async () => {
-    if (!user) return;
-    const res = await fetch("/api/board");
-    const data = await res.json();
-    // Find counter assigned to this operator (heuristic: board includes all counters)
-    // The operator sees only their own counter via ownership rules
-    setMyCounter(data.counters?.[0] ?? null); // placeholder — refine per your needs
-  }, [user]);
+  useEffect(() => {
+    if (view !== "operator" || user?.role !== "OPERATOR") return;
+    const controller = new AbortController();
+    let active = true;
+    setMyCounter(null);
+    setCounterLoading(true);
+    setCounterLoadError("");
+    setOperatorMsg("");
+    setOperatorError("");
+
+    const load = async () => {
+      try {
+        const res = await fetch("/api/counters/my-counter", {
+          credentials: "include",
+          signal: controller.signal,
+        });
+        const data = await res.json();
+        if (!active) return;
+        if (res.status === 404 && data.code === "NO_ASSIGNED_COUNTER") return;
+        if (!res.ok) throw new Error("Counter request failed");
+        setMyCounter(data.counter);
+      } catch {
+        if (active) setCounterLoadError("Failed to load your counter. Please try again.");
+      } finally {
+        if (active) setCounterLoading(false);
+      }
+    };
+    void load();
+    return () => {
+      active = false;
+      controller.abort();
+    };
+  }, [view, user, counterRetry]);
 
   useEffect(() => {
     if (view === "customer") {
       loadBoard();
       loadMyTicket();
     }
-    if (view === "operator") {
-      loadMyCounter();
-    }
-  }, [view, loadBoard, loadMyTicket, loadMyCounter]);
+  }, [view, loadBoard, loadMyTicket]);
 
   // ─────────────────────────────────────────────────────
   // AUTH ACTIONS
@@ -505,7 +530,16 @@ function App() {
                 Operator Dashboard
               </div>
               <div className="card-body">
-                {myCounter ? (
+                {counterLoading ? (
+                  <p role="status" data-testid="counter-loading">Loading your counter…</p>
+                ) : counterLoadError ? (
+                  <div className="alert alert-danger" role="alert" data-testid="counter-load-error">
+                    <p>{counterLoadError}</p>
+                    <button className="btn btn-outline-danger btn-sm" onClick={() => setCounterRetry((n) => n + 1)}>
+                      Retry
+                    </button>
+                  </div>
+                ) : myCounter ? (
                   <>
                     <h5 className="mb-3">{myCounter.name}</h5>
                     <table className="table table-sm mb-4">

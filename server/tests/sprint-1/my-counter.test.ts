@@ -30,7 +30,7 @@ beforeAll(async () => {
   cookies.push(login.headers["set-cookie"][0]);
 });
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => { vi.restoreAllMocks(); });
 afterAll(async () => {
   if (unassignedId) await prisma.user.delete({ where: { id: unassignedId } });
   await prisma.$disconnect();
