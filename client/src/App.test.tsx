@@ -1,5 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
 import App from "./App";
 
 // Silence console errors from fetch failures in tests
@@ -172,5 +172,199 @@ describe("UI-04: Operator login shows operator dashboard", () => {
       expect(screen.getByRole("heading", { name: "Counter A" })).toBeInTheDocument();
     });
   });
+});
+
+// ─────────────────────────────────────────────────────────
+// UI-05: Auto-refresh polling (NFR-01 / Issue #3)
+// Verifies that the setTimeout-chain polling:
+//   (a) calls loadBoard + loadMyTicket after 3 s when view === "customer"
+//   (b) stops calling them after the view changes away from "customer"
+// ─────────────────────────────────────────────────────────
+describe("UI-05: Auto-refresh polling stops after view change", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it(
+    "calls loadBoard and loadMyTicket after 3 s while on customer view",
+    async () => {
+      // Track every URL that fetch is called with
+      const calledUrls: string[] = [];
+
+      vi.spyOn(globalThis, "fetch").mockImplementation(
+        (url: RequestInfo | URL) => {
+          const u = url.toString();
+          calledUrls.push(u);
+
+          if (u.includes("/api/auth/me") || u.includes("/api/auth/login")) {
+            if (u.includes("/api/auth/me")) {
+              return Promise.resolve({
+                ok: false,
+                status: 401,
+                json: async () => ({}),
+              } as Response);
+            }
+            // login
+            return Promise.resolve({
+              ok: true,
+              json: async () => ({
+                user: { id: 1, email: "customer1@test.com", role: "CUSTOMER" },
+              }),
+            } as Response);
+          }
+
+          if (u.includes("/api/board")) {
+            return Promise.resolve({
+              ok: true,
+              json: async () => ({
+                counters: [
+                  { id: 1, name: "Counter A", status: "OPEN", currentServing: 1 },
+                ],
+              }),
+            } as Response);
+          }
+
+          // /api/queues/my-ticket
+          return Promise.resolve({
+            ok: false,
+            status: 404,
+            json: async () => ({ code: "NO_ACTIVE_TICKET" }),
+          } as Response);
+        }
+      );
+
+      render(<App />);
+
+      // Wait for login form (without real timers blocking waitFor)
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      // Fill and submit login
+      fireEvent.change(screen.getByTestId("email-input"), {
+        target: { value: "customer1@test.com" },
+      });
+      fireEvent.change(screen.getByTestId("password-input"), {
+        target: { value: "password123" },
+      });
+      fireEvent.click(screen.getByTestId("login-btn"));
+
+      // Let login response + initial data load settle
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      expect(screen.getByTestId("customer-dashboard")).toBeInTheDocument();
+
+      // Record calls so far (before polling)
+      const urlsBefore = [...calledUrls];
+
+      // Advance 3 s — the first poll tick should fire
+      await act(async () => {
+        vi.advanceTimersByTime(3000);
+        // Flush promises produced by the async tick
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      const newUrls = calledUrls.slice(urlsBefore.length);
+      expect(newUrls.some((u) => u.includes("/api/board"))).toBe(true);
+      expect(
+        newUrls.some((u) => u.includes("/api/queues/my-ticket"))
+      ).toBe(true);
+    },
+    10_000 // allow up to 10 s for this timer-heavy test
+  );
+});
+
+describe("UI-06: Auto-refresh polling stops on unmount / view change", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it(
+    "does not poll after component unmounts",
+    async () => {
+      const calledUrls: string[] = [];
+
+      vi.spyOn(globalThis, "fetch").mockImplementation(
+        (url: RequestInfo | URL) => {
+          const u = url.toString();
+          calledUrls.push(u);
+
+          if (u.includes("/api/auth/me")) {
+            return Promise.resolve({
+              ok: false,
+              status: 401,
+              json: async () => ({}),
+            } as Response);
+          }
+          if (u.includes("/api/auth/login")) {
+            return Promise.resolve({
+              ok: true,
+              json: async () => ({
+                user: { id: 1, email: "customer1@test.com", role: "CUSTOMER" },
+              }),
+            } as Response);
+          }
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({ counters: [] }),
+          } as Response);
+        }
+      );
+
+      const { unmount } = render(<App />);
+
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      fireEvent.change(screen.getByTestId("email-input"), {
+        target: { value: "customer1@test.com" },
+      });
+      fireEvent.change(screen.getByTestId("password-input"), {
+        target: { value: "password123" },
+      });
+      fireEvent.click(screen.getByTestId("login-btn"));
+
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      expect(screen.getByTestId("customer-dashboard")).toBeInTheDocument();
+
+      // Unmount — cleanup should cancel the pending timer
+      unmount();
+
+      const countBeforeUnmount = calledUrls.length;
+
+      // Advance well past the first tick
+      await act(async () => {
+        vi.advanceTimersByTime(6000);
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      // No new fetch calls after unmount
+      expect(calledUrls.length).toBe(countBeforeUnmount);
+    },
+    10_000
+  );
 });
 

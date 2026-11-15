@@ -91,6 +91,53 @@ function App() {
     }
   }, []);
 
+ feature/f07-public-board-refresh
+  // ── Initial data load on view change ─────────────────
+  useEffect(() => {
+    if (view === "customer") {
+      void loadBoard();
+      void loadMyTicket();
+    }
+  }, [view, loadBoard, loadMyTicket]);
+
+  // ── Auto-refresh polling (NFR-01: board updates <= 3s) ─
+  //
+  // Scope: view === "customer" only.
+  //   - loadBoard()     → refreshes counter list & serving numbers (AC-11, FR-07)
+  //   - loadMyTicket()  → refreshes customer's own queue position (AC-09, FR-02)
+  //
+  // Design: setTimeout chain (run-to-completion) rather than setInterval,
+  // so a slow API response never causes overlapping in-flight requests or
+  // stale-write race conditions. `cancelled` flag prevents state updates
+  // after the view changes or the component unmounts.
+  useEffect(() => {
+    if (view !== "customer") return;
+
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout>;
+
+    const tick = async () => {
+      try {
+        await Promise.all([loadBoard(), loadMyTicket()]);
+      } catch {
+        // Ignore transient network errors — UI retains last known state.
+        // No loading spinner or error toast here to avoid UI flicker every 3s.
+      }
+      if (!cancelled) {
+        timer = setTimeout(tick, 3000);
+      }
+    };
+
+    // First tick fires 3 s after entering the view (initial data already
+    // loaded by the effect above).
+    timer = setTimeout(tick, 3000);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [view, loadBoard, loadMyTicket]);
+
   // ── Load operator's counter ───────────────────────────
   useEffect(() => {
     if (view !== "operator" || user?.role !== "OPERATOR") return;
@@ -132,6 +179,7 @@ function App() {
       loadMyTicket();
     }
   }, [view, loadBoard, loadMyTicket]);
+ sprint1-staging
 
   // ─────────────────────────────────────────────────────
   // AUTH ACTIONS
