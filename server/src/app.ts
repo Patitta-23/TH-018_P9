@@ -157,6 +157,7 @@ app.post(
 
 // GET /api/queues/my-ticket
 // Customer views their active ticket and queue position (FR-02).
+// Returns single ticket + position (for AC-09) AND all active tickets (for AC-07b).
 app.get(
   "/api/queues/my-ticket",
   requireAuth,
@@ -165,26 +166,42 @@ app.get(
     const customerId = req.user!.id;
 
     try {
-      const ticket = await prisma.queueTicket.findFirst({
+      const allActive = await prisma.queueTicket.findMany({
         where: { customerId, status: { in: ["WAITING", "IN_SERVICE"] } },
         include: { counter: { select: { id: true, name: true, currentServing: true } } },
+        orderBy: { createdAt: "asc" },
       });
 
-      if (!ticket) {
+      if (allActive.length === 0) {
         res.status(404).json({ error: "No active ticket", code: "NO_ACTIVE_TICKET" });
         return;
       }
 
-      // Position = number of WAITING tickets with a smaller queue number
-      const position = await prisma.queueTicket.count({
-        where: {
-          counterId: ticket.counterId,
-          status: "WAITING",
-          queueNumber: { lt: ticket.queueNumber },
-        },
-      });
+      // Compute position for each active ticket
+      const ticketsWithPosition = await Promise.all(
+        allActive.map(async (t) => {
+          const pos = await prisma.queueTicket.count({
+            where: {
+              counterId: t.counterId,
+              status: "WAITING",
+              queueNumber: { lt: t.queueNumber },
+            },
+          });
+          return { ticket: t, position: pos };
+        })
+      );
 
-      res.status(200).json({ ticket, position });
+      // Primary ticket is either specified via ?counter_id= or the first active ticket
+      const counterIdQuery = req.query.counter_id ? Number(req.query.counter_id) : undefined;
+      const primary = counterIdQuery
+        ? ticketsWithPosition.find((tp) => tp.ticket.counterId === counterIdQuery) ?? ticketsWithPosition[0]
+        : ticketsWithPosition[0];
+
+      res.status(200).json({
+        ticket: primary.ticket,
+        position: primary.position,
+        tickets: ticketsWithPosition,
+      });
     } catch (error) {
       console.error("View ticket failed:", error);
       res.status(500).json({ error: "Failed to fetch ticket" });
@@ -200,10 +217,35 @@ app.delete(
   requireRole("CUSTOMER"),
   async (req: AuthRequest, res) => {
     const customerId = req.user!.id;
+    const counterId = req.query.counter_id
+      ? Number(req.query.counter_id)
+      : req.body?.counter_id
+      ? Number(req.body.counter_id)
+      : undefined;
+    const ticketId = req.query.ticket_id
+      ? Number(req.query.ticket_id)
+      : req.body?.ticket_id
+      ? Number(req.body.ticket_id)
+      : undefined;
 
     try {
+      const whereClause: {
+        customerId: number;
+        status: { in: ["WAITING", "IN_SERVICE"] };
+        id?: number;
+        counterId?: number;
+      } = {
+        customerId,
+        status: { in: ["WAITING", "IN_SERVICE"] },
+      };
+      if (ticketId) {
+        whereClause.id = ticketId;
+      } else if (counterId) {
+        whereClause.counterId = counterId;
+      }
+
       const ticket = await prisma.queueTicket.findFirst({
-        where: { customerId, status: { in: ["WAITING", "IN_SERVICE"] } },
+        where: whereClause,
       });
 
       if (!ticket) {

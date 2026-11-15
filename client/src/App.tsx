@@ -23,6 +23,11 @@ interface Ticket {
   counter: Counter;
 }
 
+interface TicketWithPosition {
+  ticket: Ticket;
+  position: number;
+}
+
 // ─── App View State ──────────────────────────────────────
 type View = "login" | "customer" | "operator";
 
@@ -36,10 +41,10 @@ function App() {
   const [loginError, setLoginError] = useState("");
   const [loginLoading, setLoginLoading] = useState(false);
 
-  // Customer state
+  // Customer state (supports multi-counter active tickets per AC-07b)
   const [counters, setCounters] = useState<Counter[]>([]);
-  const [myTicket, setMyTicket] = useState<Ticket | null>(null);
-  const [myPosition, setMyPosition] = useState<number>(0);
+  const [myTickets, setMyTickets] = useState<TicketWithPosition[]>([]);
+  const [joiningCounterId, setJoiningCounterId] = useState<number | null>(null);
   const [customerMsg, setCustomerMsg] = useState("");
   const [customerError, setCustomerError] = useState("");
 
@@ -72,17 +77,26 @@ function App() {
     }
   }, []);
 
-  // ── Load customer's active ticket ─────────────────────
+  // ── Load customer's active tickets (AC-07b) ───────────
   const loadMyTicket = useCallback(async () => {
     try {
       const res = await fetch("/api/queues/my-ticket", { credentials: "include" });
       if (res.status === 404) {
-        setMyTicket(null);
+        setMyTickets([]);
         return;
       }
       const data = await res.json();
-      setMyTicket(data.ticket ?? null);
-      setMyPosition(data.position ?? 0);
+      if (data.tickets && Array.isArray(data.tickets)) {
+        setMyTickets(data.tickets);
+      } else if (data.ticket) {
+        const single: TicketWithPosition = {
+          ticket: data.ticket,
+          position: data.position ?? 0,
+        };
+        setMyTickets([single]);
+      } else {
+        setMyTickets([]);
+      }
     } catch {
       setCustomerError("Failed to load your ticket.");
     }
@@ -107,6 +121,16 @@ function App() {
       loadMyCounter();
     }
   }, [view, loadBoard, loadMyTicket, loadMyCounter]);
+
+  // ── Active status helper (BR-01 / AC-07b) ─────────────
+  const ACTIVE_STATUSES = ["WAITING", "IN_SERVICE"];
+  const hasActiveTicketForCounter = (counterId: number) => {
+    return myTickets.some(
+      (item) =>
+        item.ticket?.counter?.id === counterId &&
+        ACTIVE_STATUSES.includes(item.ticket?.status)
+    );
+  };
 
   // ─────────────────────────────────────────────────────
   // AUTH ACTIONS
@@ -142,7 +166,7 @@ function App() {
   const handleLogout = async () => {
     await fetch("/api/auth/logout", { method: "POST", credentials: "include" });
     setUser(null);
-    setMyTicket(null);
+    setMyTickets([]);
     setMyCounter(null);
     setView("login");
   };
@@ -153,6 +177,7 @@ function App() {
   const handleJoinQueue = async (counterId: number) => {
     setCustomerMsg("");
     setCustomerError("");
+    setJoiningCounterId(counterId);
     try {
       const res = await fetch("/api/queues/join", {
         method: "POST",
@@ -170,16 +195,21 @@ function App() {
       await loadBoard();
     } catch {
       setCustomerError("Failed to join queue.");
+    } finally {
+      setJoiningCounterId(null);
     }
   };
 
-  const handleCancelTicket = async () => {
+  const handleCancelTicket = async (ticketId?: number, counterId?: number) => {
     setCustomerMsg("");
     setCustomerError("");
     try {
-      const res = await fetch("/api/queues/my-ticket", {
+      const query = counterId ? `?counter_id=${counterId}` : "";
+      const res = await fetch(`/api/queues/my-ticket${query}`, {
         method: "DELETE",
         credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: ticketId ? JSON.stringify({ ticket_id: ticketId }) : undefined,
       });
       const data = await res.json();
       if (!res.ok) {
@@ -187,7 +217,7 @@ function App() {
         return;
       }
       setCustomerMsg("🗑️ Ticket cancelled.");
-      setMyTicket(null);
+      await loadMyTicket();
       await loadBoard();
     } catch {
       setCustomerError("Failed to cancel ticket.");
@@ -358,55 +388,59 @@ function App() {
         <NavBar />
         <div className="container" data-testid="customer-dashboard">
           <div className="row g-4">
-            {/* My active ticket */}
+            {/* My active tickets (AC-07b: supports multiple counters) */}
             <div className="col-md-5">
               <div className="card shadow-sm h-100">
-                <div className="card-header bg-success text-white">My Queue Ticket</div>
+                <div className="card-header bg-success text-white">
+                  My Queue {myTickets.length > 1 ? "Tickets" : "Ticket"}
+                </div>
                 <div className="card-body">
-                  {myTicket ? (
+                  {myTickets.length > 0 ? (
                     <div data-testid="ticket-info">
-                      <p className="fs-1 text-center fw-bold text-primary">
-                        #{myTicket.queueNumber}
-                      </p>
-                      <table className="table table-sm">
-                        <tbody>
-                          <tr>
-                            <th>Counter</th>
-                            <td>{myTicket.counter.name}</td>
-                          </tr>
-                          <tr>
-                            <th>Status</th>
-                            <td>
-                              <span
-                                className={`badge ${
-                                  myTicket.status === "IN_SERVICE"
-                                    ? "bg-warning text-dark"
-                                    : "bg-secondary"
-                                }`}
-                              >
-                                {myTicket.status}
-                              </span>
-                            </td>
-                          </tr>
-                          <tr>
-                            <th>Serving now</th>
-                            <td>#{myTicket.counter.currentServing}</td>
-                          </tr>
-                          <tr>
-                            <th>People ahead</th>
-                            <td>{myPosition}</td>
-                          </tr>
-                        </tbody>
-                      </table>
-                      {myTicket.status === "WAITING" && (
-                        <button
-                          className="btn btn-danger btn-sm w-100 mt-2"
-                          onClick={handleCancelTicket}
-                          data-testid="cancel-ticket-btn"
+                      {myTickets.map(({ ticket, position }) => (
+                        <div
+                          key={ticket.id}
+                          className="border rounded p-3 mb-3 bg-light"
+                          data-testid={`ticket-card-${ticket.counter?.id ?? ticket.counter.id}`}
                         >
-                          Cancel Ticket
-                        </button>
-                      )}
+                          <div className="d-flex justify-content-between align-items-center mb-2">
+                            <span className="fw-bold">{ticket.counter?.name ?? `Counter #${ticket.counter.id}`}</span>
+                            <span
+                              className={`badge ${
+                                ticket.status === "IN_SERVICE"
+                                  ? "bg-warning text-dark"
+                                  : "bg-secondary"
+                              }`}
+                            >
+                              {ticket.status}
+                            </span>
+                          </div>
+                          <p className="fs-1 text-center fw-bold text-primary mb-1">
+                            #{ticket.queueNumber}
+                          </p>
+                          <table className="table table-sm mb-2">
+                            <tbody>
+                              <tr>
+                                <th>Serving now</th>
+                                <td>#{ticket.counter?.currentServing ?? 0}</td>
+                              </tr>
+                              <tr>
+                                <th>People ahead</th>
+                                <td>{position}</td>
+                              </tr>
+                            </tbody>
+                          </table>
+                          {ticket.status === "WAITING" && (
+                            <button
+                              className="btn btn-danger btn-sm w-100"
+                              onClick={() => handleCancelTicket(ticket.id, ticket.counter?.id)}
+                              data-testid="cancel-ticket-btn"
+                            >
+                              Cancel Ticket
+                            </button>
+                          )}
+                        </div>
+                      ))}
                     </div>
                   ) : (
                     <p className="text-muted text-center mt-4" data-testid="no-ticket-msg">
@@ -454,34 +488,39 @@ function App() {
                         </tr>
                       </thead>
                       <tbody>
-                        {counters.map((c) => (
-                          <tr key={c.id}>
-                            <td>{c.name}</td>
-                            <td>
-                              <span
-                                className={`badge ${
-                                  c.status === "OPEN" ? "bg-success" : "bg-secondary"
-                                }`}
-                              >
-                                {c.status}
-                              </span>
-                            </td>
-                            <td>#{c.currentServing}</td>
-                            <td>
-                              <button
-                                className="btn btn-primary btn-sm"
-                                disabled={
-                                  c.status === "CLOSED" ||
-                                  (myTicket !== null && myTicket.counter.id === c.id)
-                                }
-                                onClick={() => handleJoinQueue(c.id)}
-                                data-testid={`join-btn-${c.id}`}
-                              >
-                                Join
-                              </button>
-                            </td>
-                          </tr>
-                        ))}
+                        {counters.map((c) => {
+                          const hasActiveTicket = hasActiveTicketForCounter(c.id);
+                          const isJoiningThis = joiningCounterId === c.id;
+                          return (
+                            <tr key={c.id}>
+                              <td>{c.name}</td>
+                              <td>
+                                <span
+                                  className={`badge ${
+                                    c.status === "OPEN" ? "bg-success" : "bg-secondary"
+                                  }`}
+                                >
+                                  {c.status}
+                                </span>
+                              </td>
+                              <td>#{c.currentServing}</td>
+                              <td>
+                                <button
+                                  className="btn btn-primary btn-sm"
+                                  disabled={
+                                    c.status === "CLOSED" ||
+                                    hasActiveTicket ||
+                                    joiningCounterId !== null
+                                  }
+                                  onClick={() => handleJoinQueue(c.id)}
+                                  data-testid={`join-btn-${c.id}`}
+                                >
+                                  {isJoiningThis ? "Joining…" : "Join"}
+                                </button>
+                              </td>
+                            </tr>
+                          );
+                        })}
                       </tbody>
                     </table>
                   )}
