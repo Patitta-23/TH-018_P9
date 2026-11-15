@@ -108,6 +108,16 @@ function App() {
     }
   }, [view, loadBoard, loadMyTicket, loadMyCounter]);
 
+  // ── Auto-refresh polling (NFR-01: updates <= 3s) ──────
+  useEffect(() => {
+    if (view !== "customer") return;
+    const interval = setInterval(() => {
+      loadBoard();
+      loadMyTicket();
+    }, 3000);
+    return () => clearInterval(interval);
+  }, [view, loadBoard, loadMyTicket]);
+
   // ─────────────────────────────────────────────────────
   // AUTH ACTIONS
   // ─────────────────────────────────────────────────────
