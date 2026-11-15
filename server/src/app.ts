@@ -120,15 +120,33 @@ app.post(
         return;
       }
 
-      // BR-01: Customer cannot have two active tickets for the same counter
-      const existing = await prisma.queueTicket.findFirst({
-        where: {
-          customerId,
-          counterId: counter_id,
-          status: { in: ["WAITING", "IN_SERVICE"] },
-        },
+      // BR-01 & Concurrency protection: Atomic transaction for duplicate check & queue allocation
+      const result = await prisma.$transaction(async (tx) => {
+        const existing = await tx.queueTicket.findFirst({
+          where: {
+            customerId,
+            counterId: counter_id,
+            status: { in: ["WAITING", "IN_SERVICE"] },
+          },
+        });
+        if (existing) {
+          return { error: "DUPLICATE_TICKET" as const };
+        }
+
+        const last = await tx.queueTicket.findFirst({
+          where: { counterId: counter_id },
+          orderBy: { queueNumber: "desc" },
+        });
+        const queueNumber = (last?.queueNumber ?? 0) + 1;
+
+        const ticket = await tx.queueTicket.create({
+          data: { queueNumber, status: "WAITING", customerId, counterId: counter_id },
+        });
+
+        return { ticket };
       });
-      if (existing) {
+
+      if ("error" in result && result.error === "DUPLICATE_TICKET") {
         res.status(400).json({
           error: "You already have an active ticket for this queue",
           code: "DUPLICATE_TICKET",
@@ -136,18 +154,7 @@ app.post(
         return;
       }
 
-      // Assign next queue number (sequential within counter)
-      const last = await prisma.queueTicket.findFirst({
-        where: { counterId: counter_id },
-        orderBy: { queueNumber: "desc" },
-      });
-      const queueNumber = (last?.queueNumber ?? 0) + 1;
-
-      const ticket = await prisma.queueTicket.create({
-        data: { queueNumber, status: "WAITING", customerId, counterId: counter_id },
-      });
-
-      res.status(201).json({ ticket });
+      res.status(201).json({ ticket: result.ticket });
     } catch (error) {
       console.error("Join queue failed:", error);
       res.status(500).json({ error: "Failed to join queue" });
