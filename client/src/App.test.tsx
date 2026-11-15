@@ -175,7 +175,6 @@ describe("UI-04: Operator login shows operator dashboard", () => {
 });
 
 // ─────────────────────────────────────────────────────────
- feature/f02-f03-multi-counter
 // UI-07: AC-07b Multi-counter join rules & button states
 // ─────────────────────────────────────────────────────────
 describe("UI-07: AC-07b Multi-counter join rules & button states", () => {
@@ -232,8 +231,8 @@ describe("UI-07: AC-07b Multi-counter join rules & button states", () => {
 
     await waitFor(() => screen.getByTestId("customer-dashboard"));
 
-    // Counter A has active ticket -> disabled
-    expect(screen.getByTestId("join-btn-1")).toBeDisabled();
+    // Wait for counters to load & Counter A has active ticket -> disabled
+    await waitFor(() => expect(screen.getByTestId("join-btn-1")).toBeDisabled());
     // Counter B is OPEN and no active ticket there -> enabled
     expect(screen.getByTestId("join-btn-2")).not.toBeDisabled();
   });
@@ -280,7 +279,7 @@ describe("UI-07: AC-07b Multi-counter join rules & button states", () => {
     await waitFor(() => screen.getByTestId("customer-dashboard"));
 
     // Counter A is CLOSED -> disabled
-    expect(screen.getByTestId("join-btn-1")).toBeDisabled();
+    await waitFor(() => expect(screen.getByTestId("join-btn-1")).toBeDisabled());
     // Counter B is OPEN -> enabled
     expect(screen.getByTestId("join-btn-2")).not.toBeDisabled();
   });
@@ -577,5 +576,4 @@ describe("UI-06: Auto-refresh polling stops on unmount / view change", () => {
     10_000
   );
 });
-sprint1-staging
 
