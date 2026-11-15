@@ -124,3 +124,42 @@ Using `$transaction` ensures `currentServing` and ticket status stay consistent 
 
 > **TDD note:** TEST-16 (BR-03) and TEST-18 (BR-04) written before implementation. Both initially failed; enforcement added to route handler; both now pass.
 
+
+## Issue #1 contract amendment — authenticated counter selection
+
+Added 2026-11-15 before implementing this correction. This amendment does not
+claim that the original application was developed with TDD.
+
+`GET /api/counters/my-counter` requires the JWT cookie and OPERATOR role.
+The server selects Counter by the authenticated user ID (`operatorId`), never
+by a caller-provided ID or the first item on the public board.
+
+- 200: `{ "counter": { "id": number, "name": string, "status": "OPEN" | "CLOSED", "currentServing": number } }`
+- 401: `UNAUTHORIZED` for missing/invalid authentication.
+- 403: `FORBIDDEN` for CUSTOMER role.
+- 404: `NO_ASSIGNED_COUNTER` when this operator has no assignment.
+- 500: `COUNTER_LOAD_FAILED` with a generic error; no database details.
+- Public `/api/board` continues exposing only id, name, status, currentServing.
+
+The dashboard displays loading separately from an unassigned counter. Failed
+requests show an error and a retry button, without actionable stale counter data.
+Changing session cancels an outstanding counter read. Operator controls use the
+returned counter ID; all three write endpoints retain their ownership checks.
+
+### Acceptance criteria and test design
+
+| Test group | Linked requirement | Expected evidence |
+|---|---|---|
+| API assignment | F-05/F-06, BR-04 | Operator1 gets A; Operator2 gets B, even if a query supplies another operator ID |
+| API authentication | F-04, BR-04 | Anonymous/invalid cookie 401; customer 403; unassigned operator 404 |
+| API ownership | AC-18 | Each operator receives 403 on status, next and serve for the other counter; no DB changes |
+| API privacy/errors | BR-04 | Exact public response fields; simulated DB failure returns generic 500 |
+| UI assignment/actions | F-05/F-06 | Both accounts display their assigned counter and send open/close, next, serve to that ID |
+| UI load states | F-05/F-06 | Loading, no assignment, HTTP error and network failure are distinguishable; retry succeeds |
+| UI session change | F-04, BR-04 | A delayed counter response after logout cannot leak into a subsequent operator session |
+
+Regression files: `server/tests/sprint-1/my-counter.test.ts` and
+`client/src/operator-counter.test.tsx`. Run database tests only on a disposable
+isolated database seeded with the demo fixtures. Existing tests delete tickets.
+The initial failing regression run and final results will be recorded in
+`docs/sprints/sprint-1/issue-1-verification.md`.

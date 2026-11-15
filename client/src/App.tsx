@@ -50,6 +50,9 @@ function App() {
 
   // Operator state
   const [myCounter, setMyCounter] = useState<Counter | null>(null);
+  const [counterLoading, setCounterLoading] = useState(true);
+  const [counterLoadError, setCounterLoadError] = useState("");
+  const [counterRetry, setCounterRetry] = useState(0);
   const [operatorMsg, setOperatorMsg] = useState("");
   const [operatorError, setOperatorError] = useState("");
 
@@ -102,25 +105,95 @@ function App() {
     }
   }, []);
 
+ feature/f07-public-board-refresh
+  // ── Initial data load on view change ─────────────────
+  useEffect(() => {
+    if (view === "customer") {
+      void loadBoard();
+      void loadMyTicket();
+    }
+  }, [view, loadBoard, loadMyTicket]);
+
+  // ── Auto-refresh polling (NFR-01: board updates <= 3s) ─
+  //
+  // Scope: view === "customer" only.
+  //   - loadBoard()     → refreshes counter list & serving numbers (AC-11, FR-07)
+  //   - loadMyTicket()  → refreshes customer's own queue position (AC-09, FR-02)
+  //
+  // Design: setTimeout chain (run-to-completion) rather than setInterval,
+  // so a slow API response never causes overlapping in-flight requests or
+  // stale-write race conditions. `cancelled` flag prevents state updates
+  // after the view changes or the component unmounts.
+  useEffect(() => {
+    if (view !== "customer") return;
+
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout>;
+
+    const tick = async () => {
+      try {
+        await Promise.all([loadBoard(), loadMyTicket()]);
+      } catch {
+        // Ignore transient network errors — UI retains last known state.
+        // No loading spinner or error toast here to avoid UI flicker every 3s.
+      }
+      if (!cancelled) {
+        timer = setTimeout(tick, 3000);
+      }
+    };
+
+    // First tick fires 3 s after entering the view (initial data already
+    // loaded by the effect above).
+    timer = setTimeout(tick, 3000);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [view, loadBoard, loadMyTicket]);
+
   // ── Load operator's counter ───────────────────────────
-  const loadMyCounter = useCallback(async () => {
-    if (!user) return;
-    const res = await fetch("/api/board");
-    const data = await res.json();
-    // Find counter assigned to this operator (heuristic: board includes all counters)
-    // The operator sees only their own counter via ownership rules
-    setMyCounter(data.counters?.[0] ?? null); // placeholder — refine per your needs
-  }, [user]);
+  useEffect(() => {
+    if (view !== "operator" || user?.role !== "OPERATOR") return;
+    const controller = new AbortController();
+    let active = true;
+    setMyCounter(null);
+    setCounterLoading(true);
+    setCounterLoadError("");
+    setOperatorMsg("");
+    setOperatorError("");
+
+    const load = async () => {
+      try {
+        const res = await fetch("/api/counters/my-counter", {
+          credentials: "include",
+          signal: controller.signal,
+        });
+        const data = await res.json();
+        if (!active) return;
+        if (res.status === 404 && data.code === "NO_ASSIGNED_COUNTER") return;
+        if (!res.ok) throw new Error("Counter request failed");
+        setMyCounter(data.counter);
+      } catch {
+        if (active) setCounterLoadError("Failed to load your counter. Please try again.");
+      } finally {
+        if (active) setCounterLoading(false);
+      }
+    };
+    void load();
+    return () => {
+      active = false;
+      controller.abort();
+    };
+  }, [view, user, counterRetry]);
 
   useEffect(() => {
     if (view === "customer") {
       loadBoard();
       loadMyTicket();
     }
-    if (view === "operator") {
-      loadMyCounter();
-    }
-  }, [view, loadBoard, loadMyTicket, loadMyCounter]);
+  }, [view, loadBoard, loadMyTicket]);
+ sprint1-staging
 
   // ── Active status helper (BR-01 / AC-07b) ─────────────
   const ACTIVE_STATUSES = ["WAITING", "IN_SERVICE"];
@@ -547,7 +620,16 @@ function App() {
                 Operator Dashboard
               </div>
               <div className="card-body">
-                {myCounter ? (
+                {counterLoading ? (
+                  <p role="status" data-testid="counter-loading">Loading your counter…</p>
+                ) : counterLoadError ? (
+                  <div className="alert alert-danger" role="alert" data-testid="counter-load-error">
+                    <p>{counterLoadError}</p>
+                    <button className="btn btn-outline-danger btn-sm" onClick={() => setCounterRetry((n) => n + 1)}>
+                      Retry
+                    </button>
+                  </div>
+                ) : myCounter ? (
                   <>
                     <h5 className="mb-3">{myCounter.name}</h5>
                     <table className="table table-sm mb-4">
