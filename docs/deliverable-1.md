@@ -86,7 +86,7 @@
 
 | ID | Requirement | Measurable Target | Verification Method | Sprint |
 |---|---|---|---|---|
-| **NFR-01** | Queue status must be fresh | Serving number visible to customer within **$\le$ 3 seconds** of operator call | Automated UI polling test (UI-05, UI-06) | Sprint 1 |
+| **NFR-01** | Queue status must be fresh | Serving number polled and updated every 3s via recurring run-to-completion timer | Automated UI polling test (UI-05, UI-06) | Sprint 1 |
 | **NFR-02** | Protected endpoints must reject unauthenticated requests | Any unauthenticated request returns **HTTP 401** without disclosing private data | Automated API test (`auth.test.ts`) | Sprint 1 |
 | **NFR-03** | Role-based access enforcement | Customer requesting Operator endpoints returns **HTTP 403 Forbidden** | Automated API test (`auth.test.ts`) | Sprint 1 |
 
@@ -174,10 +174,10 @@
 ```
 
 **Technology Specifications:**
-- **Frontend:** React 18, TypeScript, Vite (Port `5174`), Bootstrap 5
+- **Frontend:** React 18, TypeScript, Vite (Port `5174`), Bootstrap 5 (SPA with `view` state management)
 - **Backend API:** Node.js, Express, TypeScript (Port `3001`)
 - **Database & ORM:** PostgreSQL 15, Prisma ORM
-- **Authentication:** JWT in secure `HTTP-only` cookie (`token`), bcryptjs (salt rounds 10)
+- **Authentication:** JWT in `HTTP-only` cookie (`token`, options: `{ httpOnly: true, sameSite: "lax" }`; the `secure` flag is omitted during local development and configured for HTTPS in staging/production), bcryptjs (salt rounds 10)
 - **CORS Policy:** Allows `http://localhost:5174` and `http://localhost:5173` with `credentials: true`
 
 ### C.2 Data Model & Database Constraints
@@ -215,10 +215,20 @@
 3. **BR-01 Enforcement:** Before inserting a new `QueueTicket`, the server queries active tickets where `customerId = ? AND counterId = ? AND status IN ('WAITING', 'IN_SERVICE')`. If found, HTTP 400 is returned.
 4. **BR-04 Enforcement:** Operator endpoints query `Counter` where `id = ? AND operatorId = authenticatedUser.id`. Mismatches return HTTP 403 Forbidden.
 
-### C.3 UI & Navigation Flow
-- `/login`: Email + Password form, redirects to `/customer` or `/operator` based on JWT role claim.
-- `/customer`: My Active Tickets panel + Available Counters board with dynamic action buttons.
-- `/operator`: Live assigned counter view (`/api/counters/my-counter`) with Open/Close status toggle, Call Next, and Mark Served controls.
+### C.3 UI & View State Flow
+The frontend is implemented as a Single-Page Application (SPA) driven by React state (`view: "login" | "customer" | "operator"` in `App.tsx`) rather than dedicated browser URL routing. The view states correspond to:
+
+| View State | Target Audience | Primary Functionality |
+|---|---|---|
+| `login` | Unauthenticated (Default) | Email & password authentication for Customer and Operator; redirects to view based on JWT role claim |
+| `customer` | Customer | My Active Tickets panel + Available Counters board with dynamic join action buttons and ahead count |
+| `operator` | Operator | Live assigned counter control (`/api/counters/my-counter`) with status toggle (OPEN/CLOSED), Call Next, and Mark Served |
+
+Shared UI Behavior:
+- Form validation: client-side required fields + server-side business rules.
+- Loading states: spinners and disabled button states during API requests.
+- Error states: inline alert banners displaying server error codes (e.g. `DUPLICATE_TICKET`).
+- Real-time updates: 3-second recurring interval polling using a run-to-completion `setTimeout` chain.
 
 ### C.4 API Specifications Summary
 
@@ -304,8 +314,8 @@ A Sprint 1 feature is defined as **Done** only when all criteria are satisfied:
 ### F.1 Release Information
 - **Repository URL:** https://github.com/Patitta-23/TH-018_P9
 - **Target Staging Branch:** `sprint1-staging`
-- **Sprint 1 Release Tag:** `v1.0.0-sprint1`
-- **Release Verification Commit:** `cd27beb` (PR #13)
+- **Sprint 1 Release Tag:** `v1.0.0-sprint1` (Target release tag upon main merge)
+- **Release Verification Commit:** `6be9529` (PR #13)
 
 ### F.2 Local Setup Summary
 ```bash
@@ -450,57 +460,51 @@ Node.js v24.14.0 | PostgreSQL 15 (Docker) | Vitest v1.6.1
 *From `server/tests/sprint-1/queues.test.ts` (TEST-07):*
 
 ```typescript
-it("rejects duplicate ticket for same counter (BR-01)", async () => {
-  // Arrange: customer already has a WAITING ticket for counter 1
-  await db.queueTicket.create({
-    data: {
-      customerId: customer.id,
-      counterId: 1,
-      status: "WAITING",
-      queueNumber: 1,
-    },
-  });
+// server/tests/sprint-1/queues.test.ts — TEST-07: Duplicate ticket rejected (BR-01)
+it("returns 400 DUPLICATE_TICKET when customer already has an active ticket", async () => {
+  // First join — should succeed
+  await request(app)
+    .post("/api/queues/join")
+    .set("Cookie", customerCookie)
+    .send({ counter_id: counterId });
 
-  // Act: customer tries to join counter 1 again
+  // Second join for the same counter — should be rejected
   const res = await request(app)
     .post("/api/queues/join")
     .set("Cookie", customerCookie)
-    .send({ counter_id: 1 });
+    .send({ counter_id: counterId });
 
-  // Assert: rejected with 400 DUPLICATE_TICKET
   expect(res.status).toBe(400);
   expect(res.body.code).toBe("DUPLICATE_TICKET");
 
-  const activeTickets = await db.queueTicket.findMany({
-    where: {
-      customerId: customer.id,
-      counterId: 1,
-      status: { in: ["WAITING", "IN_SERVICE"] },
-    },
+  const tickets = await prisma.queueTicket.findMany({
+    where: { status: { in: ["WAITING", "IN_SERVICE"] } },
   });
-  expect(activeTickets).toHaveLength(1); // Verified: no duplicate stored
+  expect(tickets.length).toBe(1); // Only the first ticket stored
 });
 ```
-**Execution Result:** `✓ rejects duplicate ticket for same counter (BR-01) (PASS)`
+**Execution Result:** `✓ returns 400 DUPLICATE_TICKET when customer already has an active ticket (PASS)`
 
 ---
 
 #### Excerpt 2 — Role & Ownership Enforcement (BR-04 / Issue #1)
-*From `server/tests/sprint-1/my-counter.test.ts` (TEST-18):*
+*From `server/tests/sprint-1/my-counter.test.ts` (AC-18):*
 
 ```typescript
-it("forbids operator from acting on another operator's counter (BR-04)", async () => {
-  // Arrange: counter 1 belongs to operator 1; we send request with operator 2 session
-  const res = await request(app)
-    .post("/api/counters/1/next")
-    .set("Cookie", operator2Cookie);
-
-  // Assert: rejected with 403 FORBIDDEN
-  expect(res.status).toBe(403);
-  expect(res.body.code).toBe("FORBIDDEN");
+// server/tests/sprint-1/my-counter.test.ts — AC-18: Operator ownership restriction (BR-04)
+describe.each([0, 1])("AC-18: operator %i cannot mutate the other counter", (index) => {
+  it.each(["status", "next", "serve"])("rejects %s without changing the database", async (action) => {
+    const before = { counters: await prisma.counter.findMany(), tickets: await prisma.queueTicket.findMany() };
+    const path = `/api/counters/${counters[1 - index].id}/${action}`;
+    const req = action === "status" ? request(app).patch(path).send({ status: "CLOSED" }) : request(app).post(path);
+    const res = await req.set("Cookie", cookies[index]);
+    expect(res.status).toBe(403);
+    expect(res.body.code).toBe("FORBIDDEN");
+    expect({ counters: await prisma.counter.findMany(), tickets: await prisma.queueTicket.findMany() }).toEqual(before);
+  });
 });
 ```
-**Execution Result:** `✓ forbids operator from acting on another operator's counter (BR-04) (PASS)`
+**Execution Result:** `✓ rejects next without changing the database (PASS)`
 
 ---
 
@@ -511,7 +515,7 @@ it("forbids operator from acting on another operator's counter (BR-04)", async (
 | Issue | Title | Branch | Author | Reviewer | PR | Integration Status |
 |---|---|---|---|---|---|---|
 | **#1** | Operator counter assignment & access control | `codex/fix-operator-counter` | Nannaphat | Patitta | PR #9 | Merged into `sprint1-staging` |
-| **#2** | Queue concurrency & numbering lock | `feature/f01-queue-concurrency` | Patitta | Nannaphat | PR #10 | Merged into `sprint1-staging` |
+| **#2** | Queue concurrency & numbering lock | `feature/f01-queue-concurrency` | Nannaphat | Patitta | PR #10 | Merged into `sprint1-staging` |
 | **#3** | Public board 3s auto-refresh polling | `feature/f07-public-board-refresh` | Nannaphat | Patitta | PR #11 | Merged into `sprint1-staging` |
 | **#4** | Multi-counter tracking per AC-07b | `feature/f02-f03-multi-counter` | Nannaphat | Patitta | PR #12 | Merged into `sprint1-staging` |
 | **#5** | Release test isolation & verification | `feature/issue-5-release-verification` | Patitta | Nannaphat | PR #13 | Merged into `sprint1-staging` |
@@ -519,9 +523,8 @@ it("forbids operator from acting on another operator's counter (BR-04)", async (
 
 ```text
 Reviewer Comment Sample (PR #9 - Patitta Daensikaew):
-"Verified: Added GET /api/counters/my-counter resolves counter directly from JWT session.
-Tested with operator1 and operator2 cookies; BR-04 403 guard functions properly.
-All 14 tests in my-counter.test.ts pass. Approved and merged."
+"good"
+(Verified and approved on GitHub: https://github.com/Patitta-23/TH-018_P9/pull/9)
 ```
 
 #### Git Commit Sequence (Sampled from Repository History)
@@ -561,10 +564,11 @@ Antigravity (Google DeepMind) and GitHub Copilot were utilized during developmen
 ---
 
 ### 5. Final Submission Checklist
-- [x] PDF contains complete Parts A–E and real execution evidence in Part F.
+- [x] Document contains complete Parts A–E and verified execution evidence in Part F.
 - [x] Navigation table with accurate page ranges included at the beginning.
 - [x] Both students' names, IDs, theme, repository URL, and release tag prominently displayed.
-- [x] All Sprint 1 engineering contracts, AC, and DoD appear directly in the PDF.
+- [x] All Sprint 1 engineering contracts, AC, and DoD appear directly in the document.
 - [x] Real build and automated test outputs (43 API tests, 21 UI tests) with 2 code excerpts included.
 - [x] Real GitHub Issues, PR history, reviewer comments, and commit SHAs documented.
 - [x] Zero hardcoded passwords, tokens, or credentials in Git or documentation.
+- [ ] Screenshots of 3 program scenarios attached upon final PDF compilation for LEB2 submission.
