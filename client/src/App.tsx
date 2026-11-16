@@ -105,7 +105,6 @@ function App() {
     }
   }, []);
 
- feature/f07-public-board-refresh
   // ── Initial data load on view change ─────────────────
   useEffect(() => {
     if (view === "customer") {
@@ -186,14 +185,6 @@ function App() {
       controller.abort();
     };
   }, [view, user, counterRetry]);
-
-  useEffect(() => {
-    if (view === "customer") {
-      loadBoard();
-      loadMyTicket();
-    }
-  }, [view, loadBoard, loadMyTicket]);
- sprint1-staging
 
   // ── Active status helper (BR-01 / AC-07b) ─────────────
   const ACTIVE_STATUSES = ["WAITING", "IN_SERVICE"];
