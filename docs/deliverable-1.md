@@ -314,8 +314,8 @@ A Sprint 1 feature is defined as **Done** only when all criteria are satisfied:
 ### F.1 Release Information
 - **Repository URL:** https://github.com/Patitta-23/TH-018_P9
 - **Target Staging Branch:** `sprint1-staging`
-- **Sprint 1 Release Tag:** `v1.0.0-sprint1` (Target release tag upon main merge)
-- **Release Verification Commit:** `6be9529` (PR #13)
+- **Sprint 1 Release Tag:** `v1.0.0-sprint1` (https://github.com/Patitta-23/TH-018_P9/releases/tag/v1.0.0-sprint1)
+- **Accepted Release Commit:** `8fe4ee8`
 
 ### F.2 Local Setup Summary
 ```bash
